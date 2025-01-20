@@ -6,7 +6,11 @@
   {
     description: (string-utf8 500),
     is-completed: bool,
-    created-at: uint
+    created-at: uint,
+    priority: uint,  ;; 1=Low, 2=Medium, 3=High
+    due-date: uint,  ;; Block height for due date
+    category: (string-utf8 50)
+
   }
 )
 
@@ -21,7 +25,7 @@
 (define-constant ERR-TASK-NOT-FOUND (err u101))
 
 ;; Add a new task
-(define-public (add-task (description (string-utf8 500)))
+(define-public (add-task (description (string-utf8 500)) (category (string-utf8 50)) (priority uint) (due-date uint)) 
   (let 
     (
       ;; Get or initialize the task counter for the caller
@@ -45,7 +49,10 @@
         {
           description: description,
           is-completed: false,
-          created-at: block-height
+          created-at: block-height,
+          priority: priority,
+          due-date: due-date,
+          category: category
         }
       )
       
@@ -132,3 +139,137 @@
     }
   )
 )
+
+
+;; Add priority field to tasks map
+
+
+(define-public (set-task-priority (task-id uint) (priority uint))
+  (let ((task (map-get? tasks {owner: tx-sender, task-id: task-id})))
+    (match task
+      task-details
+        (begin
+          (map-set tasks 
+            {owner: tx-sender, task-id: task-id}
+            (merge task-details {priority: priority})
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+
+(define-public (set-due-date (task-id uint) (due-date uint))
+  (let ((task (map-get? tasks {owner: tx-sender, task-id: task-id})))
+    (match task
+      task-details
+        (begin
+          (map-set tasks 
+            {owner: tx-sender, task-id: task-id}
+            (merge task-details {due-date: due-date})
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+
+
+(define-public (set-task-category (task-id uint) (category (string-utf8 50)))
+  (let ((task (map-get? tasks {owner: tx-sender, task-id: task-id})))
+    (match task
+      task-details
+        (begin
+          (map-set tasks 
+            {owner: tx-sender, task-id: task-id}
+            (merge task-details {category: category})
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+
+
+(define-map task-notes
+  { owner: principal, task-id: uint, note-id: uint }
+  { 
+    content: (string-utf8 500),
+    created-at: uint
+  }
+)
+
+(define-map note-counters
+  { owner: principal, task-id: uint }
+  { next-note-id: uint }
+)
+
+(define-public (add-task-note (task-id uint) (content (string-utf8 500)))
+  (let 
+    (
+      (note-counter (default-to { next-note-id: u0 } 
+        (map-get? note-counters { owner: tx-sender, task-id: task-id })))
+      (next-note-id (+ (get next-note-id note-counter) u1))
+    )
+    (begin
+      (map-set task-notes
+        { owner: tx-sender, task-id: task-id, note-id: next-note-id }
+        { content: content, created-at: block-height }
+      )
+      (map-set note-counters
+        { owner: tx-sender, task-id: task-id }
+        { next-note-id: next-note-id }
+      )
+      (ok next-note-id)
+    )
+  )
+)
+
+
+(define-map shared-tasks
+  { owner: principal, shared-with: principal, task-id: uint }
+  { can-edit: bool }
+)
+
+(define-public (share-task (task-id uint) (share-with principal) (can-edit bool))
+  (let ((task (map-get? tasks {owner: tx-sender, task-id: task-id})))
+    (match task
+      task-details
+        (begin
+          (map-set shared-tasks
+            { owner: tx-sender, shared-with: share-with, task-id: task-id }
+            { can-edit: can-edit }
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+
+
+(define-map task-reminders
+  { owner: principal, task-id: uint }
+  { reminder-height: uint }
+)
+
+(define-public (set-reminder (task-id uint) (blocks-from-now uint))
+  (let 
+    ((reminder-height (+ block-height blocks-from-now)))
+    (map-set task-reminders
+      { owner: tx-sender, task-id: task-id }
+      { reminder-height: reminder-height }
+    )
+    (ok true)
+  )
+)
+
+
+
