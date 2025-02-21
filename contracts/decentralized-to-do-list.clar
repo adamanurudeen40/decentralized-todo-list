@@ -273,3 +273,196 @@
 
 
 
+;; Define map for task tags
+(define-map task-tags
+  { owner: principal, task-id: uint, tag: (string-utf8 20) }
+  { created-at: uint }
+)
+
+(define-public (add-task-tag (task-id uint) (tag (string-utf8 20)))
+  (let ((task (map-get? tasks {owner: tx-sender, task-id: task-id})))
+    (match task
+      task-details
+        (begin
+          (map-set task-tags
+            { owner: tx-sender, task-id: task-id, tag: tag }
+            { created-at: block-height }
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+
+
+(define-map task-comments
+  { owner: principal, task-id: uint, comment-id: uint }
+  { 
+    content: (string-utf8 500),
+    created-at: uint,
+    author: principal
+  }
+)
+
+(define-map comment-counters
+  { task-id: uint }
+  { next-comment-id: uint }
+)
+
+(define-public (add-comment (task-id uint) (content (string-utf8 500)))
+  (let 
+    ((counter (default-to { next-comment-id: u0 } 
+      (map-get? comment-counters { task-id: task-id })))
+     (next-id (+ (get next-comment-id counter) u1)))
+    (begin
+      (map-set task-comments
+        { owner: tx-sender, task-id: task-id, comment-id: next-id }
+        { content: content, created-at: block-height, author: tx-sender }
+      )
+      (map-set comment-counters
+        { task-id: task-id }
+        { next-comment-id: next-id }
+      )
+      (ok next-id)
+    )
+  )
+)
+
+
+
+(define-map recurring-tasks
+  { owner: principal, task-id: uint }
+  { 
+    interval: uint,  ;; blocks between recurrence
+    last-created: uint
+  }
+)
+
+(define-public (set-recurring (task-id uint) (interval uint))
+  (let ((task (map-get? tasks {owner: tx-sender, task-id: task-id})))
+    (match task
+      task-details
+        (begin
+          (map-set recurring-tasks
+            { owner: tx-sender, task-id: task-id }
+            { interval: interval, last-created: block-height }
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+
+
+
+(define-map task-dependencies
+  { owner: principal, task-id: uint, depends-on: uint }
+  { created-at: uint }
+)
+
+(define-public (add-dependency (task-id uint) (depends-on uint))
+  (let ((task (map-get? tasks {owner: tx-sender, task-id: task-id})))
+    (match task
+      task-details
+        (begin
+          (map-set task-dependencies
+            { owner: tx-sender, task-id: task-id, depends-on: depends-on }
+            { created-at: block-height }
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+
+
+(define-map task-progress
+  { owner: principal, task-id: uint }
+  { 
+    percentage: uint,  ;; 0-100
+    last-updated: uint
+  }
+)
+
+(define-public (update-progress (task-id uint) (percentage uint))
+  (let ((task (map-get? tasks {owner: tx-sender, task-id: task-id})))
+    (match task
+      task-details
+        (begin
+          (map-set task-progress
+            { owner: tx-sender, task-id: task-id }
+            { percentage: percentage, last-updated: block-height }
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+
+(define-map task-time-tracking
+  { owner: principal, task-id: uint }
+  { 
+    start-time: uint,
+    total-time: uint,
+    is-running: bool
+  }
+)
+
+(define-public (start-time-tracking (task-id uint))
+  (let ((task (map-get? tasks {owner: tx-sender, task-id: task-id})))
+    (match task
+      task-details
+        (begin
+          (map-set task-time-tracking
+            { owner: tx-sender, task-id: task-id }
+            { start-time: block-height, total-time: u0, is-running: true }
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+
+
+(define-map task-attachments
+  { owner: principal, task-id: uint, attachment-id: uint }
+  { 
+    url: (string-utf8 500),
+    description: (string-utf8 100),
+    added-at: uint
+  }
+)
+
+(define-map attachment-counters
+  { task-id: uint }
+  { next-attachment-id: uint }
+)
+
+(define-public (add-attachment (task-id uint) (url (string-utf8 500)) (description (string-utf8 100)))
+  (let 
+    ((counter (default-to { next-attachment-id: u0 } 
+      (map-get? attachment-counters { task-id: task-id })))
+     (next-id (+ (get next-attachment-id counter) u1)))
+    (begin
+      (map-set task-attachments
+        { owner: tx-sender, task-id: task-id, attachment-id: next-id }
+        { url: url, description: description, added-at: block-height }
+      )
+      (map-set attachment-counters
+        { task-id: task-id }
+        { next-attachment-id: next-id }
+      )
+      (ok next-id)
+    )
+  )
+)
