@@ -466,3 +466,47 @@
     )
   )
 )
+
+
+
+;; Template storage
+(define-map task-templates
+  { owner: principal, template-id: uint }
+  {
+    name: (string-utf8 100),
+    description: (string-utf8 500),
+    category: (string-utf8 50),
+    priority: uint
+  }
+)
+
+(define-map template-counters
+  { owner: principal }
+  { next-template-id: uint }
+)
+
+(define-public (create-template 
+    (name (string-utf8 100))
+    (description (string-utf8 500))
+    (category (string-utf8 50))
+    (priority uint)
+  )
+  (let
+    (
+      (counter (default-to { next-template-id: u0 } 
+        (map-get? template-counters { owner: tx-sender })))
+      (next-id (+ (get next-template-id counter) u1))
+    )
+    (begin
+      (map-set task-templates
+        { owner: tx-sender, template-id: next-id }
+        { name: name, description: description, category: category, priority: priority }
+      )
+      (map-set template-counters
+        { owner: tx-sender }
+        { next-template-id: next-id }
+      )
+      (ok next-id)
+    )
+  )
+)
