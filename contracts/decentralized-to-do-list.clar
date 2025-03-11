@@ -273,3 +273,455 @@
 
 
 
+;; Define map for task tags
+(define-map task-tags
+  { owner: principal, task-id: uint, tag: (string-utf8 20) }
+  { created-at: uint }
+)
+
+(define-public (add-task-tag (task-id uint) (tag (string-utf8 20)))
+  (let ((task (map-get? tasks {owner: tx-sender, task-id: task-id})))
+    (match task
+      task-details
+        (begin
+          (map-set task-tags
+            { owner: tx-sender, task-id: task-id, tag: tag }
+            { created-at: block-height }
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+
+
+(define-map task-comments
+  { owner: principal, task-id: uint, comment-id: uint }
+  { 
+    content: (string-utf8 500),
+    created-at: uint,
+    author: principal
+  }
+)
+
+(define-map comment-counters
+  { task-id: uint }
+  { next-comment-id: uint }
+)
+
+(define-public (add-comment (task-id uint) (content (string-utf8 500)))
+  (let 
+    ((counter (default-to { next-comment-id: u0 } 
+      (map-get? comment-counters { task-id: task-id })))
+     (next-id (+ (get next-comment-id counter) u1)))
+    (begin
+      (map-set task-comments
+        { owner: tx-sender, task-id: task-id, comment-id: next-id }
+        { content: content, created-at: block-height, author: tx-sender }
+      )
+      (map-set comment-counters
+        { task-id: task-id }
+        { next-comment-id: next-id }
+      )
+      (ok next-id)
+    )
+  )
+)
+
+
+
+(define-map recurring-tasks
+  { owner: principal, task-id: uint }
+  { 
+    interval: uint,  ;; blocks between recurrence
+    last-created: uint
+  }
+)
+
+(define-public (set-recurring (task-id uint) (interval uint))
+  (let ((task (map-get? tasks {owner: tx-sender, task-id: task-id})))
+    (match task
+      task-details
+        (begin
+          (map-set recurring-tasks
+            { owner: tx-sender, task-id: task-id }
+            { interval: interval, last-created: block-height }
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+
+
+
+(define-map task-dependencies
+  { owner: principal, task-id: uint, depends-on: uint }
+  { created-at: uint }
+)
+
+(define-public (add-dependency (task-id uint) (depends-on uint))
+  (let ((task (map-get? tasks {owner: tx-sender, task-id: task-id})))
+    (match task
+      task-details
+        (begin
+          (map-set task-dependencies
+            { owner: tx-sender, task-id: task-id, depends-on: depends-on }
+            { created-at: block-height }
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+
+
+(define-map task-progress
+  { owner: principal, task-id: uint }
+  { 
+    percentage: uint,  ;; 0-100
+    last-updated: uint
+  }
+)
+
+(define-public (update-progress (task-id uint) (percentage uint))
+  (let ((task (map-get? tasks {owner: tx-sender, task-id: task-id})))
+    (match task
+      task-details
+        (begin
+          (map-set task-progress
+            { owner: tx-sender, task-id: task-id }
+            { percentage: percentage, last-updated: block-height }
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+
+(define-map task-time-tracking
+  { owner: principal, task-id: uint }
+  { 
+    start-time: uint,
+    total-time: uint,
+    is-running: bool
+  }
+)
+
+(define-public (start-time-tracking (task-id uint))
+  (let ((task (map-get? tasks {owner: tx-sender, task-id: task-id})))
+    (match task
+      task-details
+        (begin
+          (map-set task-time-tracking
+            { owner: tx-sender, task-id: task-id }
+            { start-time: block-height, total-time: u0, is-running: true }
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+
+
+(define-map task-attachments
+  { owner: principal, task-id: uint, attachment-id: uint }
+  { 
+    url: (string-utf8 500),
+    description: (string-utf8 100),
+    added-at: uint
+  }
+)
+
+(define-map attachment-counters
+  { task-id: uint }
+  { next-attachment-id: uint }
+)
+
+(define-public (add-attachment (task-id uint) (url (string-utf8 500)) (description (string-utf8 100)))
+  (let 
+    ((counter (default-to { next-attachment-id: u0 } 
+      (map-get? attachment-counters { task-id: task-id })))
+     (next-id (+ (get next-attachment-id counter) u1)))
+    (begin
+      (map-set task-attachments
+        { owner: tx-sender, task-id: task-id, attachment-id: next-id }
+        { url: url, description: description, added-at: block-height }
+      )
+      (map-set attachment-counters
+        { task-id: task-id }
+        { next-attachment-id: next-id }
+      )
+      (ok next-id)
+    )
+  )
+)
+
+
+
+;; Template storage
+(define-map task-templates
+  { owner: principal, template-id: uint }
+  {
+    name: (string-utf8 100),
+    description: (string-utf8 500),
+    category: (string-utf8 50),
+    priority: uint
+  }
+)
+
+(define-map template-counters
+  { owner: principal }
+  { next-template-id: uint }
+)
+
+(define-public (create-template 
+    (name (string-utf8 100))
+    (description (string-utf8 500))
+    (category (string-utf8 50))
+    (priority uint)
+  )
+  (let
+    (
+      (counter (default-to { next-template-id: u0 } 
+        (map-get? template-counters { owner: tx-sender })))
+      (next-id (+ (get next-template-id counter) u1))
+    )
+    (begin
+      (map-set task-templates
+        { owner: tx-sender, template-id: next-id }
+        { name: name, description: description, category: category, priority: priority }
+      )
+      (map-set template-counters
+        { owner: tx-sender }
+        { next-template-id: next-id }
+      )
+      (ok next-id)
+    )
+  )
+)
+
+
+
+(define-map task-labels
+  { owner: principal, task-id: uint }
+  {
+    color: (string-utf8 7), ;; Hex color code
+    label-text: (string-utf8 20)
+  }
+)
+
+(define-public (add-label (task-id uint) (color (string-utf8 7)) (label-text (string-utf8 20)))
+  (let ((task (map-get? tasks {owner: tx-sender, task-id: task-id})))
+    (match task
+      task-details
+        (begin
+          (map-set task-labels
+            { owner: tx-sender, task-id: task-id }
+            { color: color, label-text: label-text }
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+
+(define-map task-checklist
+  { owner: principal, task-id: uint, item-id: uint }
+  {
+    description: (string-utf8 200),
+    is-completed: bool
+  }
+)
+
+(define-map checklist-counters
+  { task-id: uint }
+  { next-item-id: uint }
+)
+
+(define-public (add-checklist-item (task-id uint) (description (string-utf8 200)))
+  (let
+    (
+      (counter (default-to { next-item-id: u0 }
+        (map-get? checklist-counters { task-id: task-id })))
+      (next-id (+ (get next-item-id counter) u1))
+    )
+    (begin
+      (map-set task-checklist
+        { owner: tx-sender, task-id: task-id, item-id: next-id }
+        { description: description, is-completed: false }
+      )
+      (map-set checklist-counters
+        { task-id: task-id }
+        { next-item-id: next-id }
+      )
+      (ok next-id)
+    )
+  )
+)
+
+
+(define-map archived-tasks
+  { owner: principal, task-id: uint }
+  {
+    task-data: (optional {
+      description: (string-utf8 500),
+      category: (string-utf8 50),
+      completed-at: uint
+    })
+  }
+)
+
+(define-public (archive-task (task-id uint))
+  (let ((task (map-get? tasks {owner: tx-sender, task-id: task-id})))
+    (match task
+      task-details
+        (begin
+          (map-set archived-tasks
+            { owner: tx-sender, task-id: task-id }
+            {
+              task-data: (some {
+                description: (get description task-details),
+                category: (get category task-details),
+                completed-at: block-height
+              })
+            }
+          )
+          (map-delete tasks {owner: tx-sender, task-id: task-id})
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+
+
+(define-map important-tasks
+  { owner: principal, task-id: uint }
+  { is-important: bool }
+)
+
+(define-public (toggle-importance (task-id uint))
+  (let 
+    (
+      (current-status (default-to { is-important: false }
+        (map-get? important-tasks { owner: tx-sender, task-id: task-id })))
+    )
+    (begin
+      (map-set important-tasks
+        { owner: tx-sender, task-id: task-id }
+        { is-important: (not (get is-important current-status)) }
+      )
+      (ok true)
+    )
+  )
+)
+
+
+
+(define-map task-groups
+  { owner: principal, group-id: uint }
+  {
+    name: (string-utf8 100),
+    description: (string-utf8 500)
+  }
+)
+
+(define-map group-tasks
+  { owner: principal, group-id: uint, task-id: uint }
+  { added-at: uint }
+)
+
+(define-map group-counters
+  { owner: principal }
+  { next-group-id: uint }
+)
+
+(define-public (create-group (name (string-utf8 100)) (description (string-utf8 500)))
+  (let
+    (
+      (counter (default-to { next-group-id: u0 }
+        (map-get? group-counters { owner: tx-sender })))
+      (next-id (+ (get next-group-id counter) u1))
+    )
+    (begin
+      (map-set task-groups
+        { owner: tx-sender, group-id: next-id }
+        { name: name, description: description }
+      )
+      (map-set group-counters
+        { owner: tx-sender }
+        { next-group-id: next-id }
+      )
+      (ok next-id)
+    )
+  )
+)
+
+
+(define-map task-estimates
+  { owner: principal, task-id: uint }
+  {
+    estimated-minutes: uint,
+    actual-minutes: uint
+  }
+)
+
+(define-public (set-estimate (task-id uint) (minutes uint))
+  (let ((task (map-get? tasks {owner: tx-sender, task-id: task-id})))
+    (match task
+      task-details
+        (begin
+          (map-set task-estimates
+            { owner: tx-sender, task-id: task-id }
+            { estimated-minutes: minutes, actual-minutes: u0 }
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+
+
+(define-map task-energy
+  { owner: principal, task-id: uint }
+  {
+    energy-level: uint,  ;; 1=Low, 2=Medium, 3=High
+    best-time: (string-utf8 20)  ;; e.g. "morning", "afternoon", "evening"
+  }
+)
+
+(define-public (set-energy-level 
+    (task-id uint) 
+    (energy-level uint)
+    (best-time (string-utf8 20))
+  )
+  (let ((task (map-get? tasks {owner: tx-sender, task-id: task-id})))
+    (match task
+      task-details
+        (begin
+          (map-set task-energy
+            { owner: tx-sender, task-id: task-id }
+            { energy-level: energy-level, best-time: best-time }
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
