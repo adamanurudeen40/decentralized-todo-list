@@ -725,3 +725,321 @@
     )
   )
 )
+
+
+(define-map search-index
+  { owner: principal, keyword: (string-utf8 50) }
+  { task-ids: (list 100 uint) }
+)
+
+
+
+(define-read-only (search-tasks (keyword (string-utf8 50)))
+  (default-to (list) (get task-ids (map-get? search-index { owner: tx-sender, keyword: keyword })))
+)
+
+
+(define-map task-votes
+  { task-id: uint, voter: principal }
+  { vote-type: (string-utf8 20), timestamp: uint }
+)
+
+(define-map task-vote-counts
+  { task-id: uint, vote-type: (string-utf8 20) }
+  { count: uint }
+)
+
+(define-public (vote-on-task (task-id uint) (owner principal) (vote-type (string-utf8 20)))
+  (let
+    (
+      (task (map-get? tasks {owner: owner, task-id: task-id}))
+      (current-count (default-to { count: u0 } (map-get? task-vote-counts { task-id: task-id, vote-type: vote-type })))
+    )
+    (match task
+      task-details
+        (begin
+          (map-set task-votes
+            { task-id: task-id, voter: tx-sender }
+            { vote-type: vote-type, timestamp: block-height }
+          )
+          (map-set task-vote-counts
+            { task-id: task-id, vote-type: vote-type }
+            { count: (+ (get count current-count) u1) }
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+(define-read-only (get-vote-count (task-id uint) (vote-type (string-utf8 20)))
+  (default-to u0 (get count (map-get? task-vote-counts { task-id: task-id, vote-type: vote-type })))
+)
+
+
+
+
+(define-map task-streaks
+  { owner: principal, task-id: uint }
+  { 
+    current-streak: uint,
+    longest-streak: uint,
+    last-completed: uint
+  }
+)
+
+(define-public (update-streak (task-id uint))
+  (let
+    (
+      (task (map-get? tasks {owner: tx-sender, task-id: task-id}))
+      (current-streak-data (default-to 
+        { current-streak: u0, longest-streak: u0, last-completed: u0 } 
+        (map-get? task-streaks { owner: tx-sender, task-id: task-id })))
+      (new-streak (+ (get current-streak current-streak-data) u1))
+      (new-longest (if (> new-streak (get longest-streak current-streak-data))
+                      new-streak
+                      (get longest-streak current-streak-data)))
+    )
+    (match task
+      task-details
+        (begin
+          (map-set task-streaks
+            { owner: tx-sender, task-id: task-id }
+            { 
+              current-streak: new-streak,
+              longest-streak: new-longest,
+              last-completed: block-height
+            }
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+(define-read-only (get-streak-info (task-id uint))
+  (map-get? task-streaks { owner: tx-sender, task-id: task-id })
+)
+
+
+(define-map user-points
+  { owner: principal }
+  { points: uint }
+)
+
+(define-map task-rewards
+  { owner: principal, task-id: uint }
+  { points-value: uint }
+)
+
+(define-public (set-task-reward (task-id uint) (points uint))
+  (let ((task (map-get? tasks {owner: tx-sender, task-id: task-id})))
+    (match task
+      task-details
+        (begin
+          (map-set task-rewards
+            { owner: tx-sender, task-id: task-id }
+            { points-value: points }
+          )
+          (ok true)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+(define-public (claim-task-reward (task-id uint))
+  (let
+    (
+      (task (map-get? tasks {owner: tx-sender, task-id: task-id}))
+      (reward (default-to { points-value: u0 } (map-get? task-rewards { owner: tx-sender, task-id: task-id })))
+      (current-points (default-to { points: u0 } (map-get? user-points { owner: tx-sender })))
+    )
+    (match task
+      task-details
+        (if (get is-completed task-details)
+          (begin
+            (map-set user-points
+              { owner: tx-sender }
+              { points: (+ (get points current-points) (get points-value reward)) }
+            )
+            (ok true)
+          )
+          (err u102) ;; Task not completed
+        )
+      ERR-TASK-NOT-FOUND
+    )
+  )
+)
+
+(define-read-only (get-user-points)
+  (default-to u0 (get points (map-get? user-points { owner: tx-sender })))
+)
+
+
+
+(define-map user-statistics
+  { owner: principal }
+  { 
+    tasks-created: uint,
+    tasks-completed: uint,
+    total-time-spent: uint,
+    last-updated: uint
+  }
+)
+
+(define-public (update-statistics (time-spent uint) (is-completion bool))
+  (let
+    (
+      (current-stats (default-to 
+        { tasks-created: u0, tasks-completed: u0, total-time-spent: u0, last-updated: u0 } 
+        (map-get? user-statistics { owner: tx-sender })))
+      (new-completed (if is-completion
+                        (+ (get tasks-completed current-stats) u1)
+                        (get tasks-completed current-stats)))
+    )
+    (begin
+      (map-set user-statistics
+        { owner: tx-sender }
+        { 
+          tasks-created: (+ (get tasks-created current-stats) u1),
+          tasks-completed: new-completed,
+          total-time-spent: (+ (get total-time-spent current-stats) time-spent),
+          last-updated: block-height
+        }
+      )
+      (ok true)
+    )
+  )
+)
+
+(define-read-only (get-user-statistics)
+  (map-get? user-statistics { owner: tx-sender })
+)
+
+
+
+(define-map subtasks
+  { owner: principal, parent-task-id: uint, subtask-id: uint }
+  {
+    description: (string-utf8 500),
+    is-completed: bool,
+    created-at: uint
+  }
+)
+
+(define-map subtask-counters
+  { owner: principal, parent-task-id: uint }
+  { next-id: uint }
+)
+
+(define-public (add-subtask (parent-task-id uint) (description (string-utf8 500)))
+  (let
+    (
+      (parent-task (map-get? tasks {owner: tx-sender, task-id: parent-task-id}))
+      (counter (default-to { next-id: u0 } (map-get? subtask-counters { owner: tx-sender, parent-task-id: parent-task-id })))
+      (next-id (+ (get next-id counter) u1))
+    )
+    (match parent-task
+      parent-task-details
+        (begin
+          (map-set subtasks
+            { owner: tx-sender, parent-task-id: parent-task-id, subtask-id: next-id }
+            { 
+              description: description,
+              is-completed: false,
+              created-at: block-height
+            }
+          )
+          (map-set subtask-counters
+            { owner: tx-sender, parent-task-id: parent-task-id }
+            { next-id: next-id }
+          )
+          (ok next-id)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+(define-public (complete-subtask (parent-task-id uint) (subtask-id uint))
+  (let ((subtask (map-get? subtasks {owner: tx-sender, parent-task-id: parent-task-id, subtask-id: subtask-id})))
+    (match subtask
+      subtask-details
+        (begin
+          (map-set subtasks
+            { owner: tx-sender, parent-task-id: parent-task-id, subtask-id: subtask-id }
+            (merge subtask-details { is-completed: true })
+          )
+          (ok true)
+        )
+      (err u103) ;; Subtask not found
+    )
+  )
+)
+
+(define-read-only (get-subtasks (parent-task-id uint))
+  (map-get? subtask-counters { owner: tx-sender, parent-task-id: parent-task-id })
+)
+
+
+
+
+(define-map task-exports
+  { owner: principal, export-id: uint }
+  { 
+    task-ids: (list 100 uint),
+    created-at: uint,
+    name: (string-utf8 100)
+  }
+)
+
+(define-map export-counters
+  { owner: principal }
+  { next-id: uint }
+)
+
+(define-public (export-tasks (task-ids (list 100 uint)) (name (string-utf8 100)))
+  (let
+    (
+      (counter (default-to { next-id: u0 } (map-get? export-counters { owner: tx-sender })))
+      (next-id (+ (get next-id counter) u1))
+    )
+    (begin
+      (map-set task-exports
+        { owner: tx-sender, export-id: next-id }
+        { 
+          task-ids: task-ids,
+          created-at: block-height,
+          name: name
+        }
+      )
+      (map-set export-counters
+        { owner: tx-sender }
+        { next-id: next-id }
+      )
+      (ok next-id)
+    )
+  )
+)
+
+(define-public (import-tasks (from-principal principal) (export-id uint))
+  (let
+    (
+      (export-data (map-get? task-exports { owner: from-principal, export-id: export-id }))
+    )
+    (match export-data
+      data
+        (begin
+          (ok (get task-ids data))
+        )
+      (err u104) ;; Export not found
+    )
+  )
+)
+
+(define-read-only (get-exports)
+  (map-get? export-counters { owner: tx-sender })
+)
