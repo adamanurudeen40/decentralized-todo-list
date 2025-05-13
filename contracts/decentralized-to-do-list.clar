@@ -1043,3 +1043,149 @@
 (define-read-only (get-exports)
   (map-get? export-counters { owner: tx-sender })
 )
+
+
+(define-map task-vote-proposals
+  { task-id: uint, proposal-id: uint }
+  {
+    proposer: principal,
+    action: (string-utf8 20),
+    votes-for: uint,
+    votes-against: uint,
+    status: (string-utf8 20),
+    created-at: uint,
+    expires-at: uint
+  }
+)
+
+(define-map voter-records
+  { task-id: uint, proposal-id: uint, voter: principal }
+  { vote: bool }
+)
+
+(define-map proposal-counters
+  { task-id: uint }
+  { next-id: uint }
+)
+
+(define-public (create-vote-proposal (task-id uint) (action (string-utf8 20)) (duration uint))
+  (let
+    (
+      (counter (default-to { next-id: u0 } (map-get? proposal-counters { task-id: task-id })))
+      (next-id (+ (get next-id counter) u1))
+      (expiry (+ block-height duration))
+    )
+    (begin
+      (map-set task-vote-proposals
+        { task-id: task-id, proposal-id: next-id }
+        {
+          proposer: tx-sender,
+          action: action,
+          votes-for: u0,
+          votes-against: u0,
+          status: u"active",
+          created-at: block-height,
+          expires-at: expiry
+        }
+      )
+      (map-set proposal-counters { task-id: task-id } { next-id: next-id })
+      (ok next-id)
+    )
+  )
+)
+
+(define-public (cast-vote (task-id uint) (proposal-id uint) (vote bool))
+  (let
+    (
+      (proposal (map-get? task-vote-proposals { task-id: task-id, proposal-id: proposal-id }))
+    )
+    (match proposal
+      proposal-data
+        (begin
+          (map-set voter-records
+            { task-id: task-id, proposal-id: proposal-id, voter: tx-sender }
+            { vote: vote }
+          )
+          (map-set task-vote-proposals
+            { task-id: task-id, proposal-id: proposal-id }
+            (merge proposal-data {
+              votes-for: (if vote (+ (get votes-for proposal-data) u1) (get votes-for proposal-data)),
+              votes-against: (if vote (get votes-against proposal-data) (+ (get votes-against proposal-data) u1))
+            })
+          )
+          (ok true)
+        )
+      (err u200)
+    )
+  )
+)
+
+
+
+(define-read-only (get-vote-results (task-id uint) (proposal-id uint))
+  (let
+    (
+      (proposal (map-get? task-vote-proposals { task-id: task-id, proposal-id: proposal-id }))
+    )
+    (match proposal
+      proposal-data
+        (ok {
+          votes-for: (get votes-for proposal-data),
+          votes-against: (get votes-against proposal-data),
+          status: (get status proposal-data)
+        })
+      (err u201)
+    )
+  )
+)
+
+(define-map user-badges
+  { owner: principal }
+  { earned-badges: (list 20 (string-utf8 50)) }
+)
+
+(define-map badge-criteria
+  { badge-id: (string-utf8 50) }
+  {
+    name: (string-utf8 50),
+    description: (string-utf8 200),
+    requirement: uint
+  }
+)
+
+(define-public (initialize-badge-system)
+  (begin
+    (map-set badge-criteria
+      { badge-id: u"task-master" }
+      { name: u"Task Master", description: u"Complete 50 tasks", requirement: u50 }
+    )
+    (map-set badge-criteria
+      { badge-id: u"speed-demon" }
+      { name: u"Speed Demon", description: u"Complete 10 tasks before due date", requirement: u10 }
+    )
+    (map-set badge-criteria
+      { badge-id: u"perfectionist" }
+      { name: u"Perfectionist", description: u"Complete 25 high-priority tasks", requirement: u25 }
+    )
+    (ok true)
+  )
+)
+
+(define-public (check-and-award-badges)
+  (let
+    (
+      (stats (default-to { tasks-completed: u0 } (map-get? user-statistics { owner: tx-sender })))
+      (current-badges (default-to { earned-badges: (list) } (map-get? user-badges { owner: tx-sender })))
+    )
+    (begin
+      (if (>= (get tasks-completed stats) u50)
+        (map-set user-badges
+          { owner: tx-sender }
+          { earned-badges: (unwrap-panic (as-max-len? (append (get earned-badges current-badges) u"task-master") u20)) }
+        )
+        true
+      )
+      (ok true)
+    )
+  )
+)
