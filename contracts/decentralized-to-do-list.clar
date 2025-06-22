@@ -1189,3 +1189,263 @@
     )
   )
 )
+
+(define-map workspaces
+  { workspace-id: uint }
+  {
+    name: (string-utf8 100),
+    description: (string-utf8 500),
+    owner: principal,
+    created-at: uint,
+    is-public: bool
+  }
+)
+
+(define-map workspace-members
+  { workspace-id: uint, member: principal }
+  {
+    role: (string-utf8 20),
+    joined-at: uint,
+    permissions: uint
+  }
+)
+
+(define-map workspace-tasks
+  { workspace-id: uint, task-id: uint }
+  {
+    description: (string-utf8 500),
+    assigned-to: principal,
+    created-by: principal,
+    status: (string-utf8 20),
+    priority: uint,
+    due-date: uint,
+    created-at: uint
+  }
+)
+
+(define-map workspace-counters
+  { workspace-id: uint }
+  { next-task-id: uint }
+)
+
+(define-map global-workspace-counter
+  { counter: uint }
+  { next-workspace-id: uint }
+)
+
+(define-constant ERR-WORKSPACE-NOT-FOUND (err u300))
+(define-constant ERR-NOT-WORKSPACE-MEMBER (err u301))
+(define-constant ERR-INSUFFICIENT-PERMISSIONS (err u302))
+
+(define-public (create-workspace (name (string-utf8 100)) (description (string-utf8 500)) (is-public bool))
+  (let
+    (
+      (counter (default-to { next-workspace-id: u0 } (map-get? global-workspace-counter { counter: u0 })))
+      (next-id (+ (get next-workspace-id counter) u1))
+    )
+    (begin
+      (map-set workspaces
+        { workspace-id: next-id }
+        {
+          name: name,
+          description: description,
+          owner: tx-sender,
+          created-at: block-height,
+          is-public: is-public
+        }
+      )
+      (map-set workspace-members
+        { workspace-id: next-id, member: tx-sender }
+        {
+          role: u"owner",
+          joined-at: block-height,
+          permissions: u7
+        }
+      )
+      (map-set global-workspace-counter
+        { counter: u0 }
+        { next-workspace-id: next-id }
+      )
+      (ok next-id)
+    )
+  )
+)
+
+(define-public (join-workspace (workspace-id uint))
+  (let
+    (
+      (workspace (map-get? workspaces { workspace-id: workspace-id }))
+    )
+    (match workspace
+      workspace-data
+        (if (get is-public workspace-data)
+          (begin
+            (map-set workspace-members
+              { workspace-id: workspace-id, member: tx-sender }
+              {
+                role: u"member",
+                joined-at: block-height,
+                permissions: u3
+              }
+            )
+            (ok true)
+          )
+          ERR-INSUFFICIENT-PERMISSIONS
+        )
+      ERR-WORKSPACE-NOT-FOUND
+    )
+  )
+)
+
+(define-public (invite-to-workspace (workspace-id uint) (member principal) (role (string-utf8 20)))
+  (let
+    (
+      (workspace (map-get? workspaces { workspace-id: workspace-id }))
+      (inviter-membership (map-get? workspace-members { workspace-id: workspace-id, member: tx-sender }))
+    )
+    (match workspace
+      workspace-data
+        (match inviter-membership
+          inviter-data
+            (if (>= (get permissions inviter-data) u5)
+              (begin
+                (map-set workspace-members
+                  { workspace-id: workspace-id, member: member }
+                  {
+                    role: role,
+                    joined-at: block-height,
+                    permissions: u3
+                  }
+                )
+                (ok true)
+              )
+              ERR-INSUFFICIENT-PERMISSIONS
+            )
+          ERR-NOT-WORKSPACE-MEMBER
+        )
+      ERR-WORKSPACE-NOT-FOUND
+    )
+  )
+)
+
+(define-public (create-workspace-task 
+    (workspace-id uint) 
+    (description (string-utf8 500)) 
+    (assigned-to principal) 
+    (priority uint) 
+    (due-date uint)
+  )
+  (let
+    (
+      (workspace (map-get? workspaces { workspace-id: workspace-id }))
+      (membership (map-get? workspace-members { workspace-id: workspace-id, member: tx-sender }))
+      (counter (default-to { next-task-id: u0 } (map-get? workspace-counters { workspace-id: workspace-id })))
+      (next-id (+ (get next-task-id counter) u1))
+    )
+    (match workspace
+      workspace-data
+        (match membership
+          member-data
+            (if (>= (get permissions member-data) u3)
+              (begin
+                (map-set workspace-tasks
+                  { workspace-id: workspace-id, task-id: next-id }
+                  {
+                    description: description,
+                    assigned-to: assigned-to,
+                    created-by: tx-sender,
+                    status: u"pending",
+                    priority: priority,
+                    due-date: due-date,
+                    created-at: block-height
+                  }
+                )
+                (map-set workspace-counters
+                  { workspace-id: workspace-id }
+                  { next-task-id: next-id }
+                )
+                (ok next-id)
+              )
+              ERR-INSUFFICIENT-PERMISSIONS
+            )
+          ERR-NOT-WORKSPACE-MEMBER
+        )
+      ERR-WORKSPACE-NOT-FOUND
+    )
+  )
+)
+
+(define-public (update-workspace-task-status (workspace-id uint) (task-id uint) (status (string-utf8 20)))
+  (let
+    (
+      (task (map-get? workspace-tasks { workspace-id: workspace-id, task-id: task-id }))
+      (membership (map-get? workspace-members { workspace-id: workspace-id, member: tx-sender }))
+    )
+    (match task
+      task-data
+        (match membership
+          member-data
+            (if (or (is-eq tx-sender (get assigned-to task-data)) (>= (get permissions member-data) u5))
+              (begin
+                (map-set workspace-tasks
+                  { workspace-id: workspace-id, task-id: task-id }
+                  (merge task-data { status: status })
+                )
+                (ok true)
+              )
+              (err ERR-INSUFFICIENT-PERMISSIONS)
+            )
+          (err ERR-NOT-WORKSPACE-MEMBER)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+(define-public (assign-workspace-task (workspace-id uint) (task-id uint) (new-assignee principal))
+  (let
+    (
+      (task (map-get? workspace-tasks { workspace-id: workspace-id, task-id: task-id }))
+      (membership (map-get? workspace-members { workspace-id: workspace-id, member: tx-sender }))
+      (assignee-membership (map-get? workspace-members { workspace-id: workspace-id, member: new-assignee }))
+    )
+    (match task
+      task-data
+        (match membership
+          member-data
+            (match assignee-membership
+              assignee-data
+                (if (>= (get permissions member-data) u3)
+                  (begin
+                    (map-set workspace-tasks
+                      { workspace-id: workspace-id, task-id: task-id }
+                      (merge task-data { assigned-to: new-assignee })
+                    )
+                    (ok true)
+                  )
+                  (err ERR-INSUFFICIENT-PERMISSIONS)
+                )
+              (err ERR-NOT-WORKSPACE-MEMBER)
+            )
+          (err ERR-NOT-WORKSPACE-MEMBER)
+        )
+      (err ERR-TASK-NOT-FOUND)
+    )
+  )
+)
+
+(define-read-only (get-workspace (workspace-id uint))
+  (map-get? workspaces { workspace-id: workspace-id })
+)
+
+(define-read-only (get-workspace-task (workspace-id uint) (task-id uint))
+  (map-get? workspace-tasks { workspace-id: workspace-id, task-id: task-id })
+)
+
+(define-read-only (get-workspace-membership (workspace-id uint) (member principal))
+  (map-get? workspace-members { workspace-id: workspace-id, member: member })
+)
+
+(define-read-only (is-workspace-member (workspace-id uint) (member principal))
+  (is-some (map-get? workspace-members { workspace-id: workspace-id, member: member }))
+)
