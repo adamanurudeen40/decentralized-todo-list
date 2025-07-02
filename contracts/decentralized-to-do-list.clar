@@ -1449,3 +1449,251 @@
 (define-read-only (is-workspace-member (workspace-id uint) (member principal))
   (is-some (map-get? workspace-members { workspace-id: workspace-id, member: member }))
 )
+
+(define-map task-bounties
+  { task-owner: principal, task-id: uint }
+  {
+    bounty-amount: uint,
+    bounty-placer: principal,
+    is-active: bool,
+    requirements: (string-utf8 200),
+    expires-at: uint,
+    created-at: uint
+  }
+)
+
+(define-map bounty-claims
+  { task-owner: principal, task-id: uint, claimer: principal }
+  {
+    claim-proof: (string-utf8 500),
+    submitted-at: uint,
+    status: (string-utf8 20)
+  }
+)
+
+(define-map escrowed-stx
+  { task-owner: principal, task-id: uint }
+  { amount: uint }
+)
+
+(define-constant ERR-INSUFFICIENT-STX (err u400))
+(define-constant ERR-BOUNTY-NOT-FOUND (err u401))
+(define-constant ERR-BOUNTY-EXPIRED (err u402))
+(define-constant ERR-ALREADY-CLAIMED (err u403))
+(define-constant ERR-NOT-BOUNTY-PLACER (err u404))
+(define-constant ERR-BOUNTY-NOT-ACTIVE (err u405))
+
+(define-public (place-bounty 
+    (task-owner principal) 
+    (task-id uint) 
+    (bounty-amount uint) 
+    (requirements (string-utf8 200)) 
+    (duration uint)
+  )
+  (let 
+    (
+      (task (map-get? tasks { owner: task-owner, task-id: task-id }))
+      (expiry (+ block-height duration))
+    )
+    (match task
+      task-details
+        (begin
+          (try! (stx-transfer? bounty-amount tx-sender (as-contract tx-sender)))
+          (map-set task-bounties
+            { task-owner: task-owner, task-id: task-id }
+            {
+              bounty-amount: bounty-amount,
+              bounty-placer: tx-sender,
+              is-active: true,
+              requirements: requirements,
+              expires-at: expiry,
+              created-at: block-height
+            }
+          )
+          (map-set escrowed-stx
+            { task-owner: task-owner, task-id: task-id }
+            { amount: bounty-amount }
+          )
+          (ok true)
+        )
+      ERR-TASK-NOT-FOUND
+    )
+  )
+)
+
+(define-public (submit-bounty-claim 
+    (task-owner principal) 
+    (task-id uint) 
+    (claim-proof (string-utf8 500))
+  )
+  (let
+    (
+      (bounty (map-get? task-bounties { task-owner: task-owner, task-id: task-id }))
+      (existing-claim (map-get? bounty-claims { task-owner: task-owner, task-id: task-id, claimer: tx-sender }))
+    )
+    (match bounty
+      bounty-data
+        (if (and (get is-active bounty-data) (< block-height (get expires-at bounty-data)))
+          (if (is-none existing-claim)
+            (begin
+              (map-set bounty-claims
+                { task-owner: task-owner, task-id: task-id, claimer: tx-sender }
+                {
+                  claim-proof: claim-proof,
+                  submitted-at: block-height,
+                  status: u"pending"
+                }
+              )
+              (ok true)
+            )
+            ERR-ALREADY-CLAIMED
+          )
+          ERR-BOUNTY-EXPIRED
+        )
+      ERR-BOUNTY-NOT-FOUND
+    )
+  )
+)
+
+(define-public (approve-bounty-claim 
+    (task-owner principal) 
+    (task-id uint) 
+    (claimer principal)
+  )
+  (let
+    (
+      (bounty (map-get? task-bounties { task-owner: task-owner, task-id: task-id }))
+      (claim (map-get? bounty-claims { task-owner: task-owner, task-id: task-id, claimer: claimer }))
+      (escrow (map-get? escrowed-stx { task-owner: task-owner, task-id: task-id }))
+    )
+    (match bounty
+      bounty-data
+        (match claim
+          claim-data
+            (match escrow
+              escrow-data
+                (if (is-eq tx-sender (get bounty-placer bounty-data))
+                  (begin
+                    (try! (as-contract (stx-transfer? (get amount escrow-data) tx-sender claimer)))
+                    (map-set bounty-claims
+                      { task-owner: task-owner, task-id: task-id, claimer: claimer }
+                      (merge claim-data { status: u"approved" })
+                    )
+                    (map-set task-bounties
+                      { task-owner: task-owner, task-id: task-id }
+                      (merge bounty-data { is-active: false })
+                    )
+                    (map-delete escrowed-stx { task-owner: task-owner, task-id: task-id })
+                    (ok true)
+                  )
+                  ERR-NOT-BOUNTY-PLACER
+                )
+              ERR-BOUNTY-NOT-FOUND
+            )
+          ERR-BOUNTY-NOT-FOUND
+        )
+      ERR-BOUNTY-NOT-FOUND
+    )
+  )
+)
+
+(define-public (reject-bounty-claim 
+    (task-owner principal) 
+    (task-id uint) 
+    (claimer principal)
+  )
+  (let
+    (
+      (bounty (map-get? task-bounties { task-owner: task-owner, task-id: task-id }))
+      (claim (map-get? bounty-claims { task-owner: task-owner, task-id: task-id, claimer: claimer }))
+    )
+    (match bounty
+      bounty-data
+        (match claim
+          claim-data
+            (if (is-eq tx-sender (get bounty-placer bounty-data))
+              (begin
+                (map-set bounty-claims
+                  { task-owner: task-owner, task-id: task-id, claimer: claimer }
+                  (merge claim-data { status: u"rejected" })
+                )
+                (ok true)
+              )
+              ERR-NOT-BOUNTY-PLACER
+            )
+          ERR-BOUNTY-NOT-FOUND
+        )
+      ERR-BOUNTY-NOT-FOUND
+    )
+  )
+)
+
+(define-public (cancel-bounty (task-owner principal) (task-id uint))
+  (let
+    (
+      (bounty (map-get? task-bounties { task-owner: task-owner, task-id: task-id }))
+      (escrow (map-get? escrowed-stx { task-owner: task-owner, task-id: task-id }))
+    )
+    (match bounty
+      bounty-data
+        (match escrow
+          escrow-data
+            (if (is-eq tx-sender (get bounty-placer bounty-data))
+              (begin
+                (try! (as-contract (stx-transfer? (get amount escrow-data) tx-sender (get bounty-placer bounty-data))))
+                (map-set task-bounties
+                  { task-owner: task-owner, task-id: task-id }
+                  (merge bounty-data { is-active: false })
+                )
+                (map-delete escrowed-stx { task-owner: task-owner, task-id: task-id })
+                (ok true)
+              )
+              ERR-NOT-BOUNTY-PLACER
+            )
+          ERR-BOUNTY-NOT-FOUND
+        )
+      ERR-BOUNTY-NOT-FOUND
+    )
+  )
+)
+
+(define-public (claim-expired-bounty (task-owner principal) (task-id uint))
+  (let
+    (
+      (bounty (map-get? task-bounties { task-owner: task-owner, task-id: task-id }))
+      (escrow (map-get? escrowed-stx { task-owner: task-owner, task-id: task-id }))
+    )
+    (match bounty
+      bounty-data
+        (match escrow
+          escrow-data
+            (if (and (get is-active bounty-data) (>= block-height (get expires-at bounty-data)))
+              (begin
+                (try! (as-contract (stx-transfer? (get amount escrow-data) tx-sender (get bounty-placer bounty-data))))
+                (map-set task-bounties
+                  { task-owner: task-owner, task-id: task-id }
+                  (merge bounty-data { is-active: false })
+                )
+                (map-delete escrowed-stx { task-owner: task-owner, task-id: task-id })
+                (ok true)
+              )
+              ERR-BOUNTY-NOT-ACTIVE
+            )
+          ERR-BOUNTY-NOT-FOUND
+        )
+      ERR-BOUNTY-NOT-FOUND
+    )
+  )
+)
+
+(define-read-only (get-bounty (task-owner principal) (task-id uint))
+  (map-get? task-bounties { task-owner: task-owner, task-id: task-id })
+)
+
+(define-read-only (get-bounty-claim (task-owner principal) (task-id uint) (claimer principal))
+  (map-get? bounty-claims { task-owner: task-owner, task-id: task-id, claimer: claimer })
+)
+
+(define-read-only (get-escrow-amount (task-owner principal) (task-id uint))
+  (default-to u0 (get amount (map-get? escrowed-stx { task-owner: task-owner, task-id: task-id })))
+)
