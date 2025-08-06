@@ -54,4 +54,9 @@ plan:
             emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
             path: "contracts\\decentralized-to-do-list.clar"
             clarity-version: 2
+        - emulated-contract-publish:
+            contract-name: task-achievements
+            emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+            path: "contracts\\task-achievements.clar"
+            clarity-version: 2
       epoch: "2.5"
