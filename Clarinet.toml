@@ -9,6 +9,16 @@ requirements = []
 path = 'contracts/decentralized-to-do-list.clar'
 clarity_version = 2
 epoch = 2.5
+
+[contracts.task-achievements]
+path = 'contracts/task-achievements.clar'
+clarity_version = 2
+epoch = 2.5
+
+[contracts.task-habits]
+path = 'contracts/task-habits.clar'
+clarity_version = 2
+epoch = 2.5
 [repl.analysis]
 passes = ['check_checker']
 
